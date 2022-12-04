@@ -32,16 +32,18 @@ struct {
 struct {
   u8 u0:6,
      band:2;      // Band select: 0x02 = 2m; 0x03 = 70cm
-  u8 u1;
+  u8 u1:2,
+     shift:2,
+     u2:4;
   bbcd freq[3];
-  u8 u2:2,  // always 0b11???
+  u8 u3:2,  // always 0b11???
      mode:3,      // 0b000 = FM, 0b010 = AMS C4FM, 0b100 = C4FM
      sqltype:3;   // SQL Type: off/tone/tone sql/dcs/rev tone/pr freq/pager
-  u8 u3;
   u8 u4;
-  char label[16];
   u8 u5;
+  char label[16];
   u8 u6;
+  bbcd offset;
   u8 u7;
   u8 tone;
   u8 u8;
@@ -51,6 +53,9 @@ struct {
 } memory[999];
 """
 
+SHIFT = [
+        "SIMPLEX", "-ve", "+ve"
+]
 MODE = [
         "FM",
         "??? 0b001",
@@ -104,19 +109,22 @@ if __name__ == "__main__":
                 elif freq_leastsig == 8:
                     freq += 0.75
 
+                offset = int(mem.offset) * 100
+
                 print("Freq:     %8.1f kHz" % freq)
+                print("Offset:       %4d kHz %s" % (offset, SHIFT[mem.shift]))
                 print("Mode:     %12s" % MODE[mem.mode])
                 print("SQL Type: %12s" % SQL_TYPE[mem.sqltype])
                 print("CTCSS:        %5.1f Hz" % TONE_FREQ[mem.tone])
 
                 # We don't know what these mean yet
                 assert mem.u0 in (0x00, 0x10)
-                assert mem.u1 in (0x00, 0x04, 0x07, 0x10, 0x14, 0x17, 0x24, 0x27)
-                assert mem.u2 == 0x03
-                assert mem.u3 == 0x00
+                assert mem.u1 == 0x00
+                assert mem.u2 in (0x00, 0x04, 0x07)
+                assert mem.u3 == 0x03
                 assert mem.u4 == 0x00
                 assert mem.u5 == 0x00
-                assert mem.u6 in (0x06, 0x50, 0x54, 0x70)
+                assert mem.u6 == 0x00
                 assert mem.u7 == 0x00
                 assert mem.u8 in (0x00, 0x01)
                 assert mem.u9 == 0x0d
