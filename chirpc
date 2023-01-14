@@ -180,6 +180,9 @@ if __name__ == "__main__":
     parser.add_argument("--mmap", dest="mmap",
                         default=None,
                         help="Radio memory map file location")
+    parser.add_argument("--sub-device", dest="sub_device",
+                        default=None, type=int,
+                        help="Select sub-device")
     parser.add_argument("--download-mmap", dest="download_mmap",
                         action="store_true",
                         default=False,
@@ -238,25 +241,29 @@ if __name__ == "__main__":
             s = serial.Serial(port=options.serial, timeout=0.5)
 
     radio = rclass(s)
+    if options.sub_device is not None:
+        subradio = radio.get_sub_devices()[options.sub_device]
+    else:
+        subradio = radio
 
     if options.list_settings:
-        print(radio.get_settings())
+        print(subradio.get_settings())
         sys.exit(0)
 
     if options.list_mem:
-        rf = radio.get_features()
+        rf = subradio.get_features()
         start, end = rf.memory_bounds
         for i in range(start, end + 1):
-            mem = radio.get_memory(i)
+            mem = subradio.get_memory(i)
             if mem.empty and not logger.is_visible(logging.INFO):
                 continue
             print(mem)
         sys.exit(0)
 
     if options.list_special_mem:
-        rf = radio.get_features()
+        rf = subradio.get_features()
         for i in sorted(rf.valid_special_chans):
-            mem = radio.get_memory(i)
+            mem = subradio.get_memory(i)
             if mem.empty and not logger.is_visible(logging.INFO):
                 continue
             print(mem)
@@ -331,7 +338,7 @@ if __name__ == "__main__":
                     # Sanitise the memory channel location
                     if "Location" in ch:
                         # Parse the location
-                        memnum = parse_memory_number(radio, [ch["Location"]])
+                        memnum = parse_memory_number(subradio, [ch["Location"]])
                     else:
                         # Increment from the previous radio channel
                         memnum += 1
@@ -402,7 +409,7 @@ if __name__ == "__main__":
 
                     # Store the settings
                     try:
-                        mem = radio.get_memory(memnum)
+                        mem = subradio.get_memory(memnum)
                     except errors.InvalidMemoryLocation as e:
                         LOG.exception(e)
                         sys.exit(1)
@@ -433,7 +440,7 @@ if __name__ == "__main__":
                         mem.dv_dv_code = ch["DVCODE"]
 
                     LOG.debug("Saving: %s", mem)
-                    radio.set_memory(mem)
+                    subradio.set_memory(mem)
                 except:
                     LOG.exception("Failed import at row %d: %r", idx, row)
                     raise
@@ -450,10 +457,10 @@ if __name__ == "__main__":
             csvwriter.writerow(chirp_common.Memory.CSV_FORMAT)
 
             # Write out all memory channels
-            rf = radio.get_features()
+            rf = subradio.get_features()
             start, end = rf.memory_bounds
             for i in range(start, end + 1):
-                mem = radio.get_memory(i)
+                mem = subradio.get_memory(i)
                 # Skip empty channels
                 if mem.empty:
                     continue
@@ -461,32 +468,32 @@ if __name__ == "__main__":
         sys.exit(0)
 
     if options.copy_mem:
-        src = parse_memory_number(radio, args)
-        dst = parse_memory_number(radio, args[1:])
+        src = parse_memory_number(subradio, args)
+        dst = parse_memory_number(subradio, args[1:])
         try:
-            mem = radio.get_memory(src)
+            mem = subradio.get_memory(src)
         except errors.InvalidMemoryLocation as e:
             LOG.exception(e)
             sys.exit(1)
         LOG.info("copying memory %s to %s", src, dst)
         mem.number = dst
-        radio.set_memory(mem)
+        subradio.set_memory(mem)
 
     if options.clear_mem:
-        memnum = parse_memory_number(radio, args)
+        memnum = parse_memory_number(subradio, args)
         try:
-            mem = radio.get_memory(memnum)
+            mem = subradio.get_memory(memnum)
         except errors.InvalidMemoryLocation as e:
             LOG.exception(e)
             sys.exit(1)
         if mem.empty:
             LOG.warn("memory %s is already empty, deleting again", memnum)
         mem.empty = True
-        radio.set_memory(mem)
+        subradio.set_memory(mem)
 
     if options.raw:
-        memnum = parse_memory_number(radio, args)
-        data = radio.get_raw_memory(memnum)
+        memnum = parse_memory_number(subradio, args)
+        data = subradio.get_raw_memory(memnum)
         for i in data:
             if ord(i) > 0x7F:
                 print("Memory location %s (%i):\n%s" %
@@ -525,9 +532,9 @@ if __name__ == "__main__":
             options.set_mem_dtcs or options.set_mem_dup is not None or \
             options.set_mem_mode or options.set_mem_dtcspol or\
             options.set_mem_offset:
-        memnum = parse_memory_number(radio, args)
+        memnum = parse_memory_number(subradio, args)
         try:
-            mem = radio.get_memory(memnum)
+            mem = subradio.get_memory(memnum)
         except errors.InvalidMemoryLocation as e:
             LOG.exception(e)
             sys.exit(1)
@@ -563,12 +570,12 @@ if __name__ == "__main__":
         elif options.set_mem_dtcsoff:
             mem.tmode = ""
 
-        radio.set_memory(mem)
+        subradio.set_memory(mem)
 
     if options.get_mem:
-        pos = parse_memory_number(radio, args)
+        pos = parse_memory_number(subradio, args)
         try:
-            mem = radio.get_memory(pos)
+            mem = subradio.get_memory(pos)
         except errors.InvalidMemoryLocation as e:
             mem = chirp_common.Memory()
             mem.number = pos
