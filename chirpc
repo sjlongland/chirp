@@ -117,6 +117,9 @@ if __name__ == "__main__":
     memarg.add_argument("--list-special-mem", action="store_true",
                         help="List all special memory locations")
 
+    memarg.add_argument("--import-csv", action="store_true",
+                        help="Import memory channels from a CSV file "
+                             "(overwriting existing channels)")
     memarg.add_argument("--export-csv", action="store_true",
                         help="Export memory channels to a CSV file")
 
@@ -258,6 +261,182 @@ if __name__ == "__main__":
                 continue
             print(mem)
         sys.exit(0)
+
+    if options.import_csv:
+        # Channel defaults, for the sake of easy importing
+        # Columns not given will have defaults pulled from here.
+        CHANNEL_DEFAULTS = {
+                # Base channel type
+                "Frequency": chirp_common.Memory.freq,
+                "Name": chirp_common.Memory.name,
+                "rToneFreq": chirp_common.Memory.rtone,
+                "DtcsCode": chirp_common.Memory.dtcs,
+                "rxDtcsCode": chirp_common.Memory.rx_dtcs,
+                "Tone": chirp_common.Memory.tmode,
+                "CrossMode": chirp_common.Memory.cross_mode,
+                "DtcsPolarity": chirp_common.Memory.dtcs_polarity,
+                "Skip": chirp_common.Memory.skip,
+                "Duplex": chirp_common.Memory.duplex,
+                "Offset": chirp_common.Memory.offset,
+                "Mode": chirp_common.Memory.mode,
+                "TStep": chirp_common.Memory.tuning_step,
+                "Comment": chirp_common.Memory.comment,
+                # D-Star DV type
+                "URCALL": chirp_common.DVMemory.dv_urcall,
+                "RPT1CALL": chirp_common.DVMemory.dv_rpt1call,
+                "RPT2CALL": chirp_common.DVMemory.dv_rpt2call,
+                "DVCODE": chirp_common.DVMemory.dv_code,
+        }
+
+        if len(args) != 1:
+            LOG.error("Exactly one file name must be given.")
+            sys.exit(1)
+
+        with open(args[0], "r") as fileobj:
+            csvreader = csv.DictReader(fileobj)
+
+            # Figure out which columns are present.
+            # For the incoming CSV file, we ignore "empty" header columns
+            src_columns = set(filter(lambda h : h, csvreader.fieldnames))
+            std_columns = set(chirp_common.Memory.CSV_FORMAT)
+
+            # Detect and warn about unknown column headers
+            unknown_headers = set(src_columns) - set(std_columns)
+            if unknown_headers:
+                LOG.warn("The following column headers are not known "
+                         "to CHIRP and will be ignored: %s",
+                         ", ".join(sorted(unknown_headers)))
+
+            # Read in all memory channels
+            memnum = 0
+            for idx, row in enumerate(csvreader):
+                try:
+                    LOG.debug("Importing row %d: %r", idx, row)
+                    # Set defaults
+                    ch = CHANNEL_DEFAULTS.copy()
+
+                    # Sanitise the input row
+                    # DVCODE can be blank
+                    if not row.get("DVCODE"):
+                        row.pop("DVCODE")
+
+                    # Make cToneFreq equal rToneFreq if not given
+                    if not row.get("cToneFreq"):
+                        row["cToneFreq"] = row.get("rToneFreq")
+
+                    # Apply changes
+                    ch.update(row)
+                    LOG.debug("Row %d with defaults: %r", idx, row)
+
+                    # Sanitise the memory channel location
+                    if "Location" in ch:
+                        # Parse the location
+                        memnum = parse_memory_number(radio, [ch["Location"]])
+                    else:
+                        # Increment from the previous radio channel
+                        memnum += 1
+
+                    # Parsing and sanity check
+                    # Frequencies values
+                    try:
+                        ch["Frequency"] = chirp_common.parse_freq(
+                                ch["Frequency"])
+                    except ValueError:
+                        LOG.error("Row %d column Frequency is invalid: %s",
+                                idx, ch["Frequency"])
+                        raise
+
+                    # Floating-point values
+                    for label in ("Offset", "TStep", "rToneFreq", "cToneFreq"):
+                        try:
+                            value = float(ch[label])
+                        except ValueError:
+                            LOG.error("Row %d column %s is invalid: %s",
+                                    idx, label, ch[label])
+                            raise
+
+                        # Replace the string with the parsed value
+                        ch[label] = value
+
+                    # Offset is normally given in MHz, convert to Hz
+                    ch["Offset"] *= 1000000
+
+                    # Integer values
+                    for label in ("DtcsCode", "RxDtcsCode", "DVCODE"):
+                        l_value = ch[label]
+                        if isinstance(l_value, int):
+                            # Already an integer (default value?)
+                            continue
+
+                        try:
+                            value = int(l_value, 10)
+                        except ValueError:
+                            LOG.error("Row %d column %s is invalid: %s",
+                                    idx, label, l_value)
+                            raise
+
+                        # Replace the string with the parsed value
+                        ch[label] = value
+
+                    # Enumerations
+                    for (label, expected) in (
+                            ("Duplex", ("+", "-", "")),
+                            ("DtcsPolarity", ("NN", "NR", "RN", "RR")),
+                            ("Tone", chirp_common.TONE_MODES),
+                            ("rToneFreq", chirp_common.TONES),
+                            ("cToneFreq", chirp_common.TONES),
+                            ("DtcsCode", chirp_common.DTCS_CODES),
+                            ("RxDtcsCode", chirp_common.DTCS_CODES),
+                            ("Mode", chirp_common.MODES),
+                            ("Skip", chirp_common.SKIP_VALUES),
+                    ):
+                        if ch[label] not in expected:
+                            raise ValueError(
+                                    "Row %d column %s value (%s) is "
+                                    "not one of: %s" % (
+                                        idx, label, ch[label],
+                                        ", ".join([
+                                            str(v) for v in expected
+                                        ])
+                            ))
+
+                    # Store the settings
+                    try:
+                        mem = radio.get_memory(memnum)
+                    except errors.InvalidMemoryLocation as e:
+                        LOG.exception(e)
+                        sys.exit(1)
+
+                    if mem.empty:
+                        LOG.info("creating new memory (#%s)", memnum)
+                        mem = chirp_common.Memory()
+                        mem.number = memnum
+
+                    mem.name = ch["Name"]
+                    mem.freq = ch["Frequency"]
+                    mem.duplex = ch["Duplex"]
+                    mem.offset = ch["Offset"]
+                    mem.tmode = ch["Tone"]
+                    mem.rtone = ch["rToneFreq"]
+                    mem.ctone = ch["cToneFreq"]
+                    mem.dtcs = ch["DtcsCode"]
+                    mem.rx_dtcs = ch["RxDtcsCode"]
+                    mem.dtcs_polarity = ch["DtcsPolarity"]
+                    mem.mode = ch["Mode"]
+                    mem.tuning_step = ch["TStep"]
+                    mem.skip = ch["Skip"]
+
+                    if isinstance(mem, chirp_common.DVMemory):
+                        mem.dv_urcall = ch["URCALL"]
+                        mem.dv_rpt1call = ch["RPT1CALL"]
+                        mem.dv_rpt2call = ch["RPT2CALL"]
+                        mem.dv_dv_code = ch["DVCODE"]
+
+                    LOG.debug("Saving: %s", mem)
+                    radio.set_memory(mem)
+                except:
+                    LOG.exception("Failed import at row %d: %r", idx, row)
+                    raise
 
     if options.export_csv:
         if len(args) != 1:
