@@ -15,6 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+import csv
 import glob
 import serial
 import os
@@ -115,6 +116,9 @@ if __name__ == "__main__":
 
     memarg.add_argument("--list-special-mem", action="store_true",
                         help="List all special memory locations")
+
+    memarg.add_argument("--export-csv", action="store_true",
+                        help="Export memory channels to a CSV file")
 
     memarg.add_argument("--raw", action="store_true",
                         help="Dump raw memory location")
@@ -253,6 +257,28 @@ if __name__ == "__main__":
             if mem.empty and not logger.is_visible(logging.INFO):
                 continue
             print(mem)
+        sys.exit(0)
+
+    if options.export_csv:
+        if len(args) != 1:
+            LOG.error("Exactly one file name must be given.")
+            sys.exit(1)
+
+        with open(args[0], "w") as fileobj:
+            csvwriter = csv.writer(fileobj)
+
+            # Write the standard header
+            csvwriter.writerow(chirp_common.Memory.CSV_FORMAT)
+
+            # Write out all memory channels
+            rf = radio.get_features()
+            start, end = rf.memory_bounds
+            for i in range(start, end + 1):
+                mem = radio.get_memory(i)
+                # Skip empty channels
+                if mem.empty:
+                    continue
+                csvwriter.writerow(mem.to_csv())
         sys.exit(0)
 
     if options.copy_mem:
